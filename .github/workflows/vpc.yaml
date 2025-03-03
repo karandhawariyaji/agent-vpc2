@@ -1,0 +1,61 @@
+name: VPC Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: 'User ID'
+        required: true
+        type: string
+      project_id:
+        description: 'Project ID'
+        required: true
+        type: string
+      vpc_name:
+        description: 'VPC Name'
+        required: true
+        type: string
+
+jobs:
+  vpc-management:
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_CREDENTIALS: ${{ secrets.SA_KEY }}
+      BUCKET_NAME: 'terraform-state-bucket'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Configure Terraform Backend
+        run: |
+          cat > backend.tf <<EOF
+          terraform {
+            backend "gcs" {
+              bucket = "${{ env.BUCKET_NAME }}"
+              prefix = "${{ github.event.inputs.user_id }}/${{ github.event.inputs.project_id }}/vpc/${{ github.event.inputs.vpc_name }}"
+            }
+          }
+          EOF
+
+      - name: Initialize Terraform
+        run: terraform init
+
+      - name: Check if VPC Exists
+        id: check_vpc
+        run: |
+          if gsutil ls gs://${{ env.BUCKET_NAME }}/${{ github.event.inputs.user_id }}/${{ github.event.inputs.project_id }}/vpc/${{ github.event.inputs.vpc_name }}/terraform.tfstate; then
+            echo "action=destroy" >> $GITHUB_ENV
+          else
+            echo "action=apply" >> $GITHUB_ENV
+          fi
+
+      - name: Execute Terraform
+        run: terraform ${{ env.action }} -auto-approve -var="project_id=${{ github.event.inputs.project_id }}" -var="vpc_name=${{ github.event.inputs.vpc_name }}"
+
+      - name: Delete State File After Destroy
+        if: env.action == 'destroy'
+        run: gsutil rm gs://${{ env.BUCKET_NAME }}/${{ github.event.inputs.user_id }}/${{ github.event.inputs.project_id }}/vpc/${{ github.event.inputs.vpc_name }}/terraform.tfstate
